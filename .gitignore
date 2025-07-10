@@ -1,0 +1,80 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+logs/
+log/
+
+# Environment variables
+.env
+.env.*
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Cache
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node modules (if any frontend components)
+node_modules/
+
+# Local development
+*.db
+*.sqlite3
+
+# Playwright
+.playwright/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+# Redis
+dump.rdb
+
+# Streamlit
+.streamlit/
+
+# Misc
+.DS_Store
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local 

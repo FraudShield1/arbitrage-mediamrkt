@@ -1,0 +1,36 @@
+# Prometheus configuration for monitoring the application during load tests.
+
+global:
+  scrape_interval: 15s  # How frequently to scrape targets.
+  evaluation_interval: 15s # How frequently to evaluate rules.
+
+# A scrape configuration containing exactly one endpoint to scrape:
+# Here it's the FastAPI application itself.
+scrape_configs:
+  # The job name is added as a label `job=<job_name>` to any timeseries scraped from this config.
+  - job_name: 'arbitrage-tool-api'
+
+    # metrics_path defaults to '/metrics'
+    # scheme defaults to 'http'.
+
+    static_configs:
+      # The target is the application's /metrics endpoint.
+      # When running with docker-compose, 'api-1' is the service name.
+      # If running locally, this might be 'localhost:8000'.
+      - targets: ['api-1:8000', 'api-2:8000']
+
+  - job_name: 'celery-workers'
+    static_configs:
+      # Assuming celery workers expose metrics on a specific port, e.g., 9091
+      # This would require a separate metrics exporter for Celery.
+      - targets: ['celery-worker-scraping:9091', 'celery-worker-matching:9091']
+
+  - job_name: 'locust'
+    static_configs:
+      # Locust exposes metrics that can be scraped.
+      - targets: ['locust:8089']
+
+# Alerting rules can be defined here.
+# For example, alert if the error rate is too high.
+# rule_files:
+#   - "alert.rules.yml" 

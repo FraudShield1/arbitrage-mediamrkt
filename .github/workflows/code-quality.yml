@@ -1,0 +1,392 @@
+name: Code Quality and Testing
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run weekly security scan
+    - cron: '0 6 * * 1'
+
+env:
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '18'
+
+jobs:
+  # Pre-commit hooks and code quality
+  code-quality:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-dev.txt
+
+    - name: Cache pre-commit
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pre-commit
+        key: pre-commit-${{ env.PYTHON_VERSION }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+    - name: Run pre-commit hooks
+      run: |
+        pre-commit install
+        pre-commit run --all-files --show-diff-on-failure
+
+    - name: Run type checking
+      run: mypy src/
+
+    - name: Run security scan
+      run: bandit -r src/ -f json -o security-report.json || true
+
+    - name: Upload security report
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: security-report
+        path: security-report.json
+
+  # Unit and integration tests
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: test_arbitrage
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y postgresql-client
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
+
+    - name: Install Playwright browsers
+      run: playwright install chromium
+
+    - name: Set up test database
+      env:
+        PGPASSWORD: test_password
+      run: |
+        psql -h localhost -U test_user -d test_arbitrage -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+    - name: Run unit tests
+      env:
+        DATABASE_URL: postgresql+asyncpg://test_user:test_password@localhost:5432/test_arbitrage
+        REDIS_URL: redis://localhost:6379/0
+        ENVIRONMENT: testing
+        SECRET_KEY: test-secret-key-for-testing-only
+      run: |
+        pytest tests/unit/ -v --cov=src --cov-report=xml --cov-report=term-missing
+
+    - name: Run integration tests
+      env:
+        DATABASE_URL: postgresql+asyncpg://test_user:test_password@localhost:5432/test_arbitrage
+        REDIS_URL: redis://localhost:6379/0
+        ENVIRONMENT: testing
+        SECRET_KEY: test-secret-key-for-testing-only
+      run: |
+        pytest tests/integration/ -v --cov=src --cov-append --cov-report=xml --cov-report=term-missing
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+
+  # End-to-end tests
+  e2e-tests:
+    name: End-to-End Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
+
+    - name: Install Playwright
+      run: playwright install
+
+    - name: Start services with Docker Compose
+      env:
+        ENVIRONMENT: testing
+      run: |
+        cp .env.example .env
+        docker-compose -f docker-compose.test.yml up -d
+        sleep 30
+
+    - name: Wait for services to be ready
+      run: |
+        timeout 60 bash -c 'until curl -f http://localhost:8000/health; do sleep 2; done'
+
+    - name: Run E2E tests
+      env:
+        API_BASE_URL: http://localhost:8000
+        DASHBOARD_URL: http://localhost:8501
+      run: |
+        pytest tests/e2e/ -v --maxfail=5
+
+    - name: Collect logs on failure
+      if: failure()
+      run: |
+        docker-compose -f docker-compose.test.yml logs > docker-logs.txt
+
+    - name: Upload logs
+      uses: actions/upload-artifact@v3
+      if: failure()
+      with:
+        name: docker-logs
+        path: docker-logs.txt
+
+    - name: Cleanup
+      if: always()
+      run: |
+        docker-compose -f docker-compose.test.yml down -v
+
+  # Security scanning
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+    - name: Scan for secrets
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: main
+        head: HEAD
+        extra_args: --debug --only-verified
+
+  # Docker build and security scan
+  docker:
+    name: Docker Build & Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: false
+        tags: arbitrage-tool:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Scan Docker image
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'arbitrage-tool:latest'
+        format: 'sarif'
+        output: 'docker-scan-results.sarif'
+
+    - name: Upload Docker scan results
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'docker-scan-results.sarif'
+
+  # Performance benchmarks
+  performance:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest-benchmark
+
+    - name: Start services
+      run: |
+        cp .env.example .env
+        docker-compose up -d postgres redis
+        sleep 20
+
+    - name: Run performance benchmarks
+      env:
+        DATABASE_URL: postgresql+asyncpg://arbitrage_user:arbitrage_password@localhost:5432/arbitrage
+        REDIS_URL: redis://localhost:6379/0
+      run: |
+        pytest tests/performance/ -v --benchmark-only --benchmark-json=benchmark.json
+
+    - name: Store benchmark results
+      uses: benchmark-action/github-action-benchmark@v1
+      with:
+        tool: 'pytest'
+        output-file-path: benchmark.json
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        auto-push: true
+
+    - name: Cleanup
+      if: always()
+      run: docker-compose down -v
+
+  # Dependency check
+  dependency-check:
+    name: Dependency Security Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install safety
+      run: pip install safety
+
+    - name: Check dependencies for vulnerabilities
+      run: |
+        pip freeze | safety check --json --output safety-report.json || true
+
+    - name: Upload safety report
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: safety-report
+        path: safety-report.json
+
+  # Code complexity analysis
+  complexity:
+    name: Code Complexity Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install analysis tools
+      run: |
+        pip install radon xenon
+
+    - name: Run complexity analysis
+      run: |
+        radon cc src/ --json > complexity-report.json || true
+        radon mi src/ --json > maintainability-report.json || true
+        xenon --max-absolute B --max-modules A --max-average A src/ || true
+
+    - name: Upload complexity reports
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: complexity-reports
+        path: |
+          complexity-report.json
+          maintainability-report.json 
