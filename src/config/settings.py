@@ -4,7 +4,8 @@ Application configuration using Pydantic BaseSettings.
 
 from typing import Optional, List
 from pydantic_settings import BaseSettings
-from pydantic import field_validator, AnyUrl
+from pydantic import field_validator, AnyUrl, BaseSettings, Field
+from functools import lru_cache
 
 class Settings(BaseSettings):
     """Main application settings."""
@@ -23,31 +24,18 @@ class Settings(BaseSettings):
         """Application version."""
         return "1.0.0"
 
-    # Database Configuration
-    MONGODB_URL: Optional[str] = None
-    DATABASE_URL: str  # Can be MongoDB or PostgreSQL URL
+    # MongoDB Settings
+    MONGODB_URL: str
+    DATABASE_URL: Optional[str] = None  # Will use MONGODB_URL if not set
     
-    # Legacy PostgreSQL Configuration (for compatibility)
-    POSTGRES_HOST: str
-    POSTGRES_PORT: int
-    POSTGRES_DB: str
-    POSTGRES_USER: str
-    POSTGRES_PASSWORD: str
-
-    # Redis Configuration
-    REDIS_HOST: str
-    REDIS_PORT: int
-    REDIS_URL: AnyUrl
-
-    # Celery Configuration
-    CELERY_BROKER_DB: int = 1
-    CELERY_RESULT_DB: int = 2
-
-    # API Configuration
-    API_HOST: str = "0.0.0.0"
-    API_PORT: int = 8000
-    API_BASE_URL: str = "http://localhost:8000"
-
+    # API Settings
+    API_V1_STR: str = "/api/v1"
+    PROJECT_NAME: str = "Cross-Market Arbitrage Tool"
+    
+    # Telegram Settings
+    TELEGRAM_BOT_TOKEN: Optional[str] = None
+    TELEGRAM_CHAT_ID: Optional[str] = None
+    
     # Dashboard Configuration
     DASHBOARD_PORT: int = 8501
     STREAMLIT_SERVER_PORT: int = 8501
@@ -63,8 +51,6 @@ class Settings(BaseSettings):
     AMAZON_ASSOCIATE_TAG: Optional[str] = None
 
     # Notification Configuration
-    TELEGRAM_BOT_TOKEN: Optional[str] = None
-    TELEGRAM_CHAT_ID: Optional[str] = None
     TELEGRAM_WEBHOOK_SECRET: Optional[str] = None  # Secret token for webhook verification
     TELEGRAM_WEBHOOK_URL: Optional[str] = None  # Full URL for Telegram webhook endpoint
     SLACK_WEBHOOK_URL: Optional[AnyUrl] = None
@@ -85,16 +71,7 @@ class Settings(BaseSettings):
     SCRAPING_RETRY_ATTEMPTS: int = 3
     SCRAPING_TIMEOUT: int = 30
 
-    # Proxy Configuration (optional)
-    PROXY_ENABLED: bool = False
-    PROXY_LIST_URL: Optional[AnyUrl] = None
-    PROXY_USERNAME: Optional[str] = None
-    PROXY_PASSWORD: Optional[str] = None
-
     # Security Configuration
-    JWT_SECRET_KEY: str
-    JWT_ALGORITHM: str = "HS256"
-    JWT_EXPIRATION_MINUTES: int = 30
     API_RATE_LIMIT: int = 100
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8501", "http://0.0.0.0:8501"]
     ALLOWED_HOSTS: List[str] = ["localhost", "127.0.0.1", "0.0.0.0"]
@@ -118,10 +95,9 @@ class Settings(BaseSettings):
     # Performance Configuration
     DATABASE_POOL_SIZE: int = 20
     DATABASE_MAX_OVERFLOW: int = 30
-    REDIS_CONNECTION_POOL_SIZE: int = 50
     CELERY_WORKER_CONCURRENCY: int = 4
 
-    @field_validator('SLACK_WEBHOOK_URL', 'PROXY_LIST_URL', mode='before')
+    @field_validator('SLACK_WEBHOOK_URL', mode='before')
     @classmethod
     def validate_optional_urls(cls, v):
         """Convert empty strings to None for optional URL fields."""
@@ -134,14 +110,15 @@ class Settings(BaseSettings):
         env_file_encoding = "utf-8"
         case_sensitive = False
 
-# Global settings instance
-_settings: Optional[Settings] = None
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Use MONGODB_URL as DATABASE_URL if not set
+        if not self.DATABASE_URL and self.MONGODB_URL:
+            self.DATABASE_URL = self.MONGODB_URL
 
+@lru_cache()
 def get_settings() -> Settings:
-    """Return cached settings instance or create a new one."""
-    global _settings
-    if _settings is None:
-        _settings = Settings()
+    _settings = Settings()
     return _settings
 
 settings = get_settings() 

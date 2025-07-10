@@ -1,7 +1,16 @@
-# API package for Cross-Market Arbitrage Tool
+"""
+API routes initialization.
+"""
 
-# Import and expose endpoint modules for main.py
-from .v1.endpoints import products, alerts, stats
-from . import auth, health
+from fastapi import APIRouter
+from .routes import products, alerts, stats, health, webhooks
 
-__all__ = ["products", "alerts", "stats", "auth", "health"] 
+# Create main router
+router = APIRouter()
+
+# Include route modules
+router.include_router(products.router, prefix="/products", tags=["Products"])
+router.include_router(alerts.router, prefix="/alerts", tags=["Alerts"])
+router.include_router(stats.router, prefix="/stats", tags=["Statistics"])
+router.include_router(health.router, prefix="/health", tags=["Health"])
+router.include_router(webhooks.router, prefix="/webhooks", tags=["Webhooks"]) 
