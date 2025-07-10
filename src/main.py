@@ -166,6 +166,12 @@ async def start_24_7_scraper():
         logger.error(f"Failed to start 24/7 scraper: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to start 24/7 scraper: {str(e)}")
 
+# GET endpoint for easy browser testing
+@app.get("/api/v1/scraper/start-24-7")
+async def start_24_7_scraper_get():
+    """Start 24/7 scheduled scraping (GET version for browser testing)."""
+    return await start_24_7_scraper()
+
 # Stop 24/7 scraper
 @app.post("/api/v1/scraper/stop-24-7")
 async def stop_24_7_scraper():
@@ -196,6 +202,12 @@ async def stop_24_7_scraper():
     except Exception as e:
         logger.error(f"Failed to stop 24/7 scraper: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to stop 24/7 scraper: {str(e)}")
+
+# GET endpoint for easy browser testing
+@app.get("/api/v1/scraper/stop-24-7")
+async def stop_24_7_scraper_get():
+    """Stop 24/7 scheduled scraping (GET version for browser testing)."""
+    return await stop_24_7_scraper()
 
 # Manual scraper start endpoint
 @app.post("/api/v1/scraper/start")
