@@ -462,8 +462,103 @@ def auto_start_scheduler():
         scraper_state["is_scheduled"] = True
         scraper_state["last_start"] = datetime.utcnow().isoformat()
         logger.info("[AUTO-START] 24/7 scheduler started automatically on app startup")
+        
+        # Send Telegram notification about auto-start
+        try:
+            asyncio.create_task(send_telegram_startup_notification())
+        except Exception as e:
+            logger.error(f"Failed to send startup Telegram notification: {e}")
     else:
         logger.info("[AUTO-START] 24/7 scheduler already running; no action taken")
+
+async def send_telegram_startup_notification():
+    """Send Telegram notification when 24/7 scraper auto-starts."""
+    try:
+        from src.services.notifications import send_telegram_notification
+        
+        message = f"""🚀 **24/7 Arbitrage Bot Started**
+
+✅ **Auto-Start Successful**
+⏰ Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
+🔄 Status: 24/7 scheduler activated
+📊 Mode: Continuous monitoring
+
+📋 **Schedule:**
+• Light scraping: Every 15 minutes
+• Deep scraping: Every 3 hours  
+• Analysis: Every hour
+• Monitoring: Continuous
+
+🎯 **Next Actions:**
+• First light scraping in ~15 minutes
+• First analysis in ~1 hour
+• Deep scraping in ~3 hours
+
+💡 The bot is now running 24/7 and will send alerts for opportunities!"""
+        
+        success = await send_telegram_notification("24/7 Bot Started", message)
+        if success:
+            logger.info("✅ Startup Telegram notification sent successfully")
+        else:
+            logger.warning("⚠️ Failed to send startup Telegram notification")
+            
+    except Exception as e:
+        logger.error(f"❌ Error sending startup Telegram notification: {e}")
+
+async def send_telegram_scraping_notification(scraping_type: str, products_found: int, duration: float):
+    """Send Telegram notification for completed scraping sessions."""
+    try:
+        from src.services.notifications import send_telegram_notification
+        
+        emoji = "🔄" if scraping_type == "light" else "🔥"
+        type_name = "Light Scraping" if scraping_type == "light" else "Deep Scraping"
+        
+        message = f"""{emoji} **{type_name} Completed**
+
+📦 **Results:**
+• Products found: {products_found}
+• Duration: {duration:.1f} seconds
+• Type: {scraping_type.capitalize()}
+
+⏰ **Time:** {datetime.utcnow().strftime('%H:%M:%S')} UTC
+🔄 **Status:** Session completed successfully
+
+💡 **Next:** {type_name} will run again in {'15 minutes' if scraping_type == 'light' else '3 hours'}"""
+        
+        success = await send_telegram_notification(f"{type_name} Complete", message)
+        if success:
+            logger.info(f"✅ {type_name} Telegram notification sent successfully")
+        else:
+            logger.warning(f"⚠️ Failed to send {type_name} Telegram notification")
+            
+    except Exception as e:
+        logger.error(f"❌ Error sending {scraping_type} Telegram notification: {e}")
+
+async def send_telegram_analysis_notification(total_products: int, recent_products: int, recent_sessions: int):
+    """Send Telegram notification for completed analysis sessions."""
+    try:
+        from src.services.notifications import send_telegram_notification
+        
+        message = f"""📊 **Analysis Session Complete**
+
+📈 **Database Statistics:**
+• Total products: {total_products:,}
+• Recent products (24h): {recent_products:,}
+• Recent sessions (24h): {recent_sessions}
+
+⏰ **Time:** {datetime.utcnow().strftime('%H:%M:%S')} UTC
+🔄 **Status:** Analysis completed successfully
+
+💡 **Next:** Analysis will run again in 1 hour"""
+        
+        success = await send_telegram_notification("Analysis Complete", message)
+        if success:
+            logger.info("✅ Analysis Telegram notification sent successfully")
+        else:
+            logger.warning("⚠️ Failed to send analysis Telegram notification")
+            
+    except Exception as e:
+        logger.error(f"❌ Error sending analysis Telegram notification: {e}")
 
 def run_scheduled_scraping():
     """Run continuous 24/7 scraping with detailed logging."""
@@ -507,6 +602,7 @@ def run_scheduled_scraping():
                                    timestamp=current_time.strftime('%H:%M:%S'))
                         
                         loop.close()
+                        asyncio.create_task(send_telegram_scraping_notification("light", products_found, (datetime.utcnow() - datetime.fromisoformat(scraper_state["current_session"]["started_at"])).total_seconds()))
                     except Exception as e:
                         logger.error(f"❌ Error in light scraping session #{session_count}: {e}")
                         logger.error(f"🔧 Error details: {type(e).__name__}: {str(e)}")
@@ -531,6 +627,7 @@ def run_scheduled_scraping():
                                    timestamp=current_time.strftime('%H:%M:%S'))
                         
                         loop.close()
+                        asyncio.create_task(send_telegram_scraping_notification("deep", products_found, (datetime.utcnow() - datetime.fromisoformat(scraper_state["current_session"]["started_at"])).total_seconds()))
                     except Exception as e:
                         logger.error(f"❌ Error in deep scraping session #{session_count}: {e}")
                         logger.error(f"🔧 Error details: {type(e).__name__}: {str(e)}")
@@ -553,6 +650,7 @@ def run_scheduled_scraping():
                                    timestamp=current_time.strftime('%H:%M:%S'))
                         
                         loop.close()
+                        asyncio.create_task(send_telegram_analysis_notification(scraper_state["total_products"], scraper_state["recent_products_24h"], scraper_state["recent_sessions_24h"]))
                     except Exception as e:
                         logger.error(f"❌ Error in analysis session: {e}")
                         logger.error(f"🔧 Error details: {type(e).__name__}: {str(e)}")
@@ -626,6 +724,12 @@ async def execute_scraping_session(scraping_type: str):
         logger.info(f"   • Completed: {session_end.strftime('%H:%M:%S')}")
         logger.info(f"   • Session type: {scraping_type}")
         
+        # Send Telegram notification for successful scraping
+        try:
+            await send_telegram_scraping_notification(scraping_type, len(products), session_duration)
+        except Exception as e:
+            logger.error(f"Failed to send scraping Telegram notification: {e}")
+        
         return len(products)
         
     except Exception as e:
@@ -693,6 +797,12 @@ async def execute_analysis_session():
         scraper_state["recent_products_24h"] = recent_products
         scraper_state["recent_sessions_24h"] = len(recent_sessions)
         
+        # Send Telegram notification for successful analysis
+        try:
+            await send_telegram_analysis_notification(total_products, recent_products, len(recent_sessions))
+        except Exception as e:
+            logger.error(f"Failed to send analysis Telegram notification: {e}")
+            
     except Exception as e:
         session_end = datetime.utcnow()
         session_duration = (session_end - session_start).total_seconds()
