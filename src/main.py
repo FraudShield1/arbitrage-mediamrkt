@@ -107,6 +107,30 @@ async def scraper_status():
             "timestamp": datetime.utcnow().isoformat()
         }
 
+# Test scraper endpoint
+@app.get("/api/v1/scraper/test")
+async def test_scraper():
+    """Test if scraper can be initialized."""
+    try:
+        # Import scraper here to avoid circular imports
+        from src.services.scraper.mediamarkt_scraper import MediaMarktScraper
+        
+        scraper = MediaMarktScraper()
+        
+        return {
+            "status": "success",
+            "message": "Scraper can be initialized",
+            "scraper_class": "MediaMarktScraper",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Failed to initialize scraper: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
 # Manual scraper start endpoint
 @app.post("/api/v1/scraper/start")
 async def start_scraping(background_tasks: BackgroundTasks):
@@ -117,8 +141,8 @@ async def start_scraping(background_tasks: BackgroundTasks):
         
         scraper = MediaMarktScraper()
         
-        # Add scraping task to background
-        background_tasks.add_task(scraper.scrape_products)
+        # Add scraping task to background using the correct method
+        background_tasks.add_task(scraper.scrape_all_products)
         
         return {
             "status": "started",
