@@ -452,6 +452,19 @@ async def get_detailed_monitor():
             "timestamp": datetime.utcnow().isoformat()
         }
 
+@app.on_event("startup")
+def auto_start_scheduler():
+    global scraper_state, scheduler_thread, stop_scheduler
+    if not scraper_state.get("is_scheduled", False):
+        stop_scheduler.clear()
+        scheduler_thread = threading.Thread(target=run_scheduled_scraping, daemon=True)
+        scheduler_thread.start()
+        scraper_state["is_scheduled"] = True
+        scraper_state["last_start"] = datetime.utcnow().isoformat()
+        logger.info("[AUTO-START] 24/7 scheduler started automatically on app startup")
+    else:
+        logger.info("[AUTO-START] 24/7 scheduler already running; no action taken")
+
 def run_scheduled_scraping():
     """Run continuous 24/7 scraping with detailed logging."""
     global scraper_state
