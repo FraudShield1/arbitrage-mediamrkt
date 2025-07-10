@@ -12,6 +12,9 @@ import structlog
 import asyncio
 from datetime import datetime, timedelta
 import json
+import threading
+import time
+from typing import Dict, Any
 
 logger = structlog.get_logger(__name__)
 
@@ -33,6 +36,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Global scraper state management
+scraper_state = {
+    "is_running": False,
+    "is_scheduled": False,
+    "last_start": None,
+    "last_stop": None,
+    "total_sessions": 0,
+    "current_session": None
+}
+
+# Scheduled task management
+scheduler_thread = None
+stop_scheduler = threading.Event()
 
 # Basic health check endpoint
 @app.get("/health")
@@ -92,11 +109,13 @@ async def scraper_status():
         })
         
         return {
-            "status": "active" if recent_sessions else "inactive",
+            "status": "active" if recent_sessions or scraper_state["is_running"] else "inactive",
             "total_products": total_products,
             "recent_products_24h": recent_products,
             "recent_sessions": len(recent_sessions),
             "last_session": recent_sessions[0] if recent_sessions else None,
+            "scraper_state": scraper_state,
+            "scheduled": scraper_state["is_scheduled"],
             "timestamp": datetime.utcnow().isoformat()
         }
     except Exception as e:
@@ -106,6 +125,103 @@ async def scraper_status():
             "error": str(e),
             "timestamp": datetime.utcnow().isoformat()
         }
+
+# Start 24/7 scraper
+@app.post("/api/v1/scraper/start-24-7")
+async def start_24_7_scraper():
+    """Start 24/7 scheduled scraping."""
+    global scraper_state, scheduler_thread, stop_scheduler
+    
+    if scraper_state["is_scheduled"]:
+        return {
+            "status": "already_running",
+            "message": "24/7 scraper is already running",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    
+    try:
+        # Reset stop flag
+        stop_scheduler.clear()
+        
+        # Start scheduler thread
+        scheduler_thread = threading.Thread(target=run_scheduled_scraping, daemon=True)
+        scheduler_thread.start()
+        
+        scraper_state["is_scheduled"] = True
+        scraper_state["last_start"] = datetime.utcnow().isoformat()
+        
+        logger.info("24/7 scraper started")
+        
+        return {
+            "status": "started",
+            "message": "24/7 scraper started successfully",
+            "schedule": {
+                "light_scraping": "Every 15 minutes",
+                "deep_scraping": "Every 3 hours",
+                "analysis": "Every hour"
+            },
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Failed to start 24/7 scraper: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start 24/7 scraper: {str(e)}")
+
+# Stop 24/7 scraper
+@app.post("/api/v1/scraper/stop-24-7")
+async def stop_24_7_scraper():
+    """Stop 24/7 scheduled scraping."""
+    global scraper_state, stop_scheduler
+    
+    if not scraper_state["is_scheduled"]:
+        return {
+            "status": "not_running",
+            "message": "24/7 scraper is not running",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    
+    try:
+        # Signal scheduler to stop
+        stop_scheduler.set()
+        
+        scraper_state["is_scheduled"] = False
+        scraper_state["last_stop"] = datetime.utcnow().isoformat()
+        
+        logger.info("24/7 scraper stopped")
+        
+        return {
+            "status": "stopped",
+            "message": "24/7 scraper stopped successfully",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Failed to stop 24/7 scraper: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to stop 24/7 scraper: {str(e)}")
+
+# Manual scraper start endpoint
+@app.post("/api/v1/scraper/start")
+async def start_scraping(background_tasks: BackgroundTasks):
+    """Manually start a single scraping session."""
+    try:
+        # Import scraper here to avoid circular imports
+        from src.services.scraper.mediamarkt_scraper import MediaMarktScraper
+        
+        scraper = MediaMarktScraper()
+        
+        # Add scraping task to background using the correct method
+        background_tasks.add_task(scraper.scrape_all_products)
+        
+        scraper_state["is_running"] = True
+        scraper_state["last_start"] = datetime.utcnow().isoformat()
+        scraper_state["total_sessions"] += 1
+        
+        return {
+            "status": "started",
+            "message": "Scraping session started in background",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Failed to start scraping: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start scraping: {str(e)}")
 
 # Test scraper endpoint
 @app.get("/api/v1/scraper/test")
@@ -130,28 +246,6 @@ async def test_scraper():
             "error": str(e),
             "timestamp": datetime.utcnow().isoformat()
         }
-
-# Manual scraper start endpoint
-@app.post("/api/v1/scraper/start")
-async def start_scraping(background_tasks: BackgroundTasks):
-    """Manually start a scraping session."""
-    try:
-        # Import scraper here to avoid circular imports
-        from src.services.scraper.mediamarkt_scraper import MediaMarktScraper
-        
-        scraper = MediaMarktScraper()
-        
-        # Add scraping task to background using the correct method
-        background_tasks.add_task(scraper.scrape_all_products)
-        
-        return {
-            "status": "started",
-            "message": "Scraping session started in background",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    except Exception as e:
-        logger.error(f"Failed to start scraping: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to start scraping: {str(e)}")
 
 # Product count endpoint
 @app.get("/api/v1/products/count")
@@ -218,6 +312,99 @@ async def get_opportunities():
             "error": str(e),
             "timestamp": datetime.utcnow().isoformat()
         }
+
+# Scraper control endpoint
+@app.get("/api/v1/scraper/control")
+async def get_scraper_control():
+    """Get scraper control status and options."""
+    return {
+        "current_state": scraper_state,
+        "available_actions": [
+            "POST /api/v1/scraper/start-24-7 - Start 24/7 scraper",
+            "POST /api/v1/scraper/stop-24-7 - Stop 24/7 scraper", 
+            "POST /api/v1/scraper/start - Start single session",
+            "GET /api/v1/scraper/status - Check status"
+        ],
+        "schedule_info": {
+            "light_scraping": "Every 15 minutes",
+            "deep_scraping": "Every 3 hours", 
+            "analysis": "Every hour",
+            "alerts": "Real-time"
+        },
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+def run_scheduled_scraping():
+    """Run scheduled scraping in background thread."""
+    global scraper_state
+    
+    logger.info("Starting scheduled scraping thread")
+    
+    while not stop_scheduler.is_set():
+        try:
+            current_time = datetime.utcnow()
+            minute = current_time.minute
+            hour = current_time.hour
+            
+            # Light scraping every 15 minutes
+            if minute % 15 == 0:
+                logger.info("Starting scheduled light scraping")
+                asyncio.run(execute_scraping_session("light"))
+            
+            # Deep scraping every 3 hours
+            if hour % 3 == 0 and minute == 0:
+                logger.info("Starting scheduled deep scraping")
+                asyncio.run(execute_scraping_session("deep"))
+            
+            # Analysis every hour
+            if minute == 0:
+                logger.info("Starting scheduled analysis")
+                asyncio.run(execute_analysis_session())
+            
+            # Sleep for 1 minute before next check
+            time.sleep(60)
+            
+        except Exception as e:
+            logger.error(f"Error in scheduled scraping: {e}")
+            time.sleep(60)  # Wait before retrying
+    
+    logger.info("Scheduled scraping thread stopped")
+
+async def execute_scraping_session(scraping_type: str):
+    """Execute a scraping session."""
+    try:
+        from src.services.scraper.mediamarkt_scraper import MediaMarktScraper
+        
+        scraper = MediaMarktScraper()
+        
+        if scraping_type == "light":
+            products = await scraper.scrape_all_products(max_pages=3, max_products=50)
+        else:  # deep
+            products = await scraper.scrape_all_products(max_pages=10, max_products=200)
+        
+        scraper_state["is_running"] = False
+        scraper_state["total_sessions"] += 1
+        
+        logger.info(f"Scheduled {scraping_type} scraping completed", 
+                   products_found=len(products))
+        
+    except Exception as e:
+        logger.error(f"Error in scheduled scraping session: {e}")
+        scraper_state["is_running"] = False
+
+async def execute_analysis_session():
+    """Execute analysis session."""
+    try:
+        # Import analysis functions here
+        logger.info("Starting scheduled analysis session")
+        
+        # Add your analysis logic here
+        # Example: analyze_arbitrage_opportunities()
+        
+        logger.info("Scheduled analysis completed")
+        
+    except Exception as e:
+        logger.error(f"Error in scheduled analysis: {e}")
 
 if __name__ == "__main__":
     import uvicorn
