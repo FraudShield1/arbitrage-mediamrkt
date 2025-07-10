@@ -4,11 +4,18 @@ Application configuration using Pydantic BaseSettings.
 
 from typing import Optional, List
 from pydantic_settings import BaseSettings
-from pydantic import field_validator, AnyUrl, BaseSettings, Field
+from pydantic import field_validator, AnyUrl, Field, ConfigDict
 from functools import lru_cache
 
 class Settings(BaseSettings):
     """Main application settings."""
+    
+    model_config = ConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8", 
+        case_sensitive=False,
+        extra="ignore"  # Ignore extra fields for flexibility
+    )
 
     # Environment
     ENVIRONMENT: str = "development"
@@ -49,6 +56,12 @@ class Settings(BaseSettings):
     AMAZON_ACCESS_KEY: Optional[str] = None
     AMAZON_SECRET_KEY: Optional[str] = None
     AMAZON_ASSOCIATE_TAG: Optional[str] = None
+
+    # JWT Authentication Settings
+    JWT_SECRET_KEY: str = "your_super_secret_jwt_key_please_change_in_production_123456789"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRATION_MINUTES: int = 30
+    JWT_REFRESH_EXPIRATION_DAYS: int = 7
 
     # Notification Configuration
     TELEGRAM_WEBHOOK_SECRET: Optional[str] = None  # Secret token for webhook verification
@@ -96,6 +109,11 @@ class Settings(BaseSettings):
     DATABASE_POOL_SIZE: int = 20
     DATABASE_MAX_OVERFLOW: int = 30
     CELERY_WORKER_CONCURRENCY: int = 4
+    
+    # Scraper Performance Configuration
+    MAX_CONCURRENT_PAGES: int = 3
+    MAX_BROWSER_CONTEXTS: int = 2
+    REDIS_CONNECTION_POOL_SIZE: int = 20
 
     @field_validator('SLACK_WEBHOOK_URL', mode='before')
     @classmethod
@@ -104,11 +122,6 @@ class Settings(BaseSettings):
         if v == '' or v is None:
             return None
         return v
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

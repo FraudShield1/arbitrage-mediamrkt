@@ -4,22 +4,33 @@
 
 ### 1. Install Dependencies
 ```bash
-pip3 install motor pymongo fastapi uvicorn streamlit celery redis asyncpg playwright
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate  # Unix
+# or
+.\venv\Scripts\activate  # Windows
+
+# Install requirements
+pip3 install -r requirements.txt
 playwright install chromium
 ```
 
 ### 2. Configure Environment (.env)
 ```bash
+# Create from example
+cp .env.example .env
+
+# Edit with your values:
 # Database
-MONGODB_URL=mongodb+srv://shemsybot:***@cluster0.7i47zbl.mongodb.net/arbitrage_tool
+MONGODB_URL=mongodb+srv://<username>:<password>@<cluster>.mongodb.net/<database>
 DATABASE_URL=${MONGODB_URL}
 
 # Notifications  
-TELEGRAM_BOT_TOKEN=7777704395:AAG_wk5PEgVPPcCP3KTm_D-2NbwSWwnrHqo
-TELEGRAM_CHAT_ID=6008126687
+TELEGRAM_BOT_TOKEN=<your_bot_token>  # From @BotFather
+TELEGRAM_CHAT_ID=<your_chat_id>      # From @userinfobot
 
 # Cache
-REDIS_URL=redis://default:***@redis-15535.c15.us-east-1-2.ec2.redns.redis-cloud.com:15535
+REDIS_URL=redis://<username>:<password>@<host>:<port>
 ```
 
 ### 3. Start Services
@@ -37,76 +48,61 @@ celery -A src.workers.celery_app worker --loglevel=info
 ### 4. Verify Setup
 ```bash
 # Test database connection
-python3 -c "
-import asyncio
-from src.config.database import check_database_connection
-print('Database OK:', asyncio.run(check_database_connection()))
-"
+python3 scripts/test_db_connection.py
 
 # Test Telegram notification
-python3 -c "
-import asyncio
-from src.services.notifications import send_telegram_notification
-print('Telegram OK:', asyncio.run(send_telegram_notification('Test', 'Setup complete')))
-"
+python3 scripts/test_telegram.py
 ```
 
-### 5. Configure Telegram Webhook (Optional)
-```bash
-# Install ngrok for local development
-brew install ngrok  # macOS
-# or
-snap install ngrok  # Ubuntu
+### 5. Configure Telegram Webhook
+See [Webhook Setup](webhook-setup.md) for detailed instructions.
 
-# Start ngrok tunnel
-ngrok http 8000
+## Production Setup
 
-# Configure webhook URL
-python3 src/utils/setup_telegram_webhook.py
+For production deployment, see [Deployment Guide](deployment-guide.md).
 
-# Verify webhook setup
-curl -X GET https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo
-```
+### Additional Configuration
 
-See [Webhook Setup](webhook-setup.md) for detailed configuration and usage.
+#### MongoDB Collections
+Collections are created automatically with proper indexes:
+- `products`: Stores product data
+  - Indexes: EAN, ASIN, updated_at
+- `price_alerts`: User price monitoring
+  - Indexes: user_id, product_id, created_at
+- `keepa_data`: Historical prices
+  - Indexes: asin, timestamp
+- `scraping_sessions`: Job tracking
+  - Indexes: status, started_at
 
-## Production Deployment
+#### Service Ports
+- FastAPI: 8000 (API endpoints)
+- Streamlit: 8501 (Dashboard)
+- Flower: 5555 (Celery monitoring)
+- Prometheus: 9090 (Metrics)
+- Grafana: 3000 (Dashboards)
 
-### Docker (Recommended)
-```bash
-# Build and start all services
-docker-compose up -d
+#### Security Notes
+- Use strong passwords for all services
+- Keep .env file secure and never commit to VCS
+- Rotate API keys regularly
+- Use separate credentials for development/production
+- See [Security Guide](security.md) for best practices
 
-# View logs
-docker-compose logs -f
+#### Monitoring Setup
+- Enable health checks
+- Configure logging
+- Set up alerts
+- Monitor system resources
+- See [Monitoring Guide](monitoring.md) for details
 
-# Health check
-curl http://localhost:8000/health
-```
+## Troubleshooting
 
-### Manual Deployment
-1. Set production environment variables
-2. Configure reverse proxy (Nginx)
-3. Set up systemd services for auto-restart
-4. Configure SSL certificates
+See [Troubleshooting Guide](troubleshooting.md) for common issues and solutions.
 
-## Configuration Details
+## Next Steps
 
-### MongoDB Collections (Auto-created)
-- `products` - Product data with ASIN, EAN, pricing
-- `price_alerts` - User-defined price monitoring  
-- `keepa_data` - Historical price data
-- `scraping_sessions` - Job tracking and results
-
-### Service Ports
-- **FastAPI**: 8000 (API endpoints)
-- **Streamlit**: 8501 (Dashboard)
-- **Flower**: 5555 (Celery monitoring)
-- **Prometheus**: 9090 (Metrics)
-- **Grafana**: 3000 (Dashboards)
-
-### Key Endpoints
-- `http://localhost:8000/health` - API health check
-- `http://localhost:8000/docs` - API documentation
-- `http://localhost:8501` - Dashboard interface
-- `http://localhost:5555` - Task monitoring 
+1. Review [Security Guide](security.md)
+2. Configure monitoring
+3. Set up production deployment
+4. Enable authentication
+5. Configure backup system 

@@ -14,19 +14,27 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from src.config.database import get_db_session
 from src.services.notifications import send_telegram_notification
-from src.config.settings import settings
+from src.config.settings import get_settings
 
 logger = structlog.get_logger(__name__)
 
 
-class BusinessArbitrageDetector:
-    """Business-grade arbitrage opportunity detector with automated notifications."""
+class ArbitrageDetector:
+    """Enhanced arbitrage detection service with configurable parameters."""
     
     def __init__(self):
-        self.min_profit_margin = settings.MIN_PROFIT_MARGIN
-        self.min_profit_amount = settings.MIN_PROFIT_AMOUNT
-        self.notification_sent_cache = set()  # Prevent spam notifications
+        """Initialize the arbitrage detector with settings."""
+        self.settings = get_settings()
+        self.min_profit_margin = self.settings.MIN_PROFIT_MARGIN
+        self.min_profit_amount = self.settings.MIN_PROFIT_AMOUNT
         
+        # Amazon fee structure (configurable)
+        self.amazon_referral_fee = 0.08  # 8% average
+        self.amazon_closing_fee = 1.35   # €1.35 average
+        self.shipping_cost = 4.99        # €4.99 standard shipping
+        
+        logger.info(f"ArbitrageDetector initialized with min profit margin: {self.min_profit_margin}")
+
     async def analyze_products_for_opportunities(
         self, 
         products: List[Dict[str, Any]],
@@ -463,7 +471,7 @@ async def analyze_scraped_products_for_arbitrage(products: List[Dict[str, Any]])
     Returns:
         List of arbitrage opportunities
     """
-    detector = BusinessArbitrageDetector()
+    detector = ArbitrageDetector()
     return await detector.analyze_products_for_opportunities(products)
 
 

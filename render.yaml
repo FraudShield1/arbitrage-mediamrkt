@@ -4,11 +4,11 @@ services:
     name: arbitrage-api
     env: python
     region: frankfurt  # EU region for lower latency with MediaMarkt.pt
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && playwright install chromium
     startCommand: uvicorn src.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
-        value: 3.10.0
+        value: 3.11.0
       - key: ENVIRONMENT
         value: production
       - key: DEBUG
@@ -21,6 +21,8 @@ services:
         sync: false
       - key: KEEPA_API_KEY
         sync: false
+      - key: REDIS_URL
+        sync: false
     healthCheckPath: /health
     autoDeploy: true
 
@@ -30,10 +32,10 @@ services:
     env: python
     region: frankfurt
     buildCommand: pip install -r requirements.txt
-    startCommand: streamlit run src/dashboard/main.py --server.port $PORT --server.address 0.0.0.0
+    startCommand: streamlit run src/dashboard/simple_main.py --server.port $PORT --server.address 0.0.0.0
     envVars:
       - key: PYTHON_VERSION
-        value: 3.10.0
+        value: 3.11.0
       - key: ENVIRONMENT
         value: production
       - key: DEBUG

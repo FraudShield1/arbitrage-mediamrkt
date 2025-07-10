@@ -6,47 +6,59 @@ Business-grade version for 1000+ product handling.
 
 import asyncio
 from typing import List, Dict, Any, Optional, Set
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import re
 from decimal import Decimal
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, quote
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import aiohttp
 
 from playwright.async_api import async_playwright, Page, Browser, BrowserContext
 from bs4 import BeautifulSoup
 import structlog
 
-from src.config.settings import settings
+from src.config.settings import get_settings
 
 logger = structlog.get_logger(__name__)
 
 
 class MediaMarktScraper:
-    """MediaMarkt.pt product scraper optimized for business-grade 1000+ product handling."""
+    """Enhanced MediaMarkt scraper with business-grade features."""
     
-    def __init__(self, max_concurrent_pages: int = 3, max_browser_contexts: int = 2):
-        self.base_url = "https://www.mediamarkt.pt"
-        # Updated to use the search endpoint with discount sorting
-        self.search_url = "https://mediamarkt.pt/pages/search-results-page?q=+&sort_by=discount"
-        self.browser: Optional[Browser] = None
-        self.contexts: List[BrowserContext] = []
-        self.pages: List[Page] = []
-        self.max_concurrent_pages = max_concurrent_pages
-        self.max_browser_contexts = max_browser_contexts
+    def __init__(self):
+        """Initialize the scraper with enhanced configuration."""
+        self.settings = get_settings()
+        self.session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=self.settings.SCRAPING_TIMEOUT),
+            connector=aiohttp.TCPConnector(limit=self.settings.SCRAPING_CONCURRENT_LIMIT)
+        )
         
-        # Business-grade performance optimization
-        self.seen_products: Set[str] = set()  # Track duplicate products by hash
-        self.product_hash_cache: Dict[str, str] = {}  # Product hash cache for deduplication
-        self.product_count_cache: Dict[int, int] = {}  # Cache page product counts
-        self.performance_metrics = {
-            "start_time": None,
-            "pages_processed": 0,
-            "products_found": 0,
-            "duplicates_filtered": 0,
-            "errors": 0
+        # Base URLs for different MediaMarkt domains
+        self.base_urls = {
+            'pt': 'https://mediamarkt.pt',
+            'es': 'https://mediamarkt.es', 
+            'de': 'https://mediamarkt.de'
         }
+        
+        # Enhanced headers for better stealth
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'pt-PT,pt;q=0.9,en;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0'
+        }
+        
+        logger.info("MediaMarktScraper initialized with business-grade configuration")
     
     async def __aenter__(self):
         """Async context manager entry."""
@@ -93,7 +105,7 @@ class MediaMarktScraper:
             self.browser = await playwright.chromium.launch(**launch_options)
             
             # Create multiple contexts for business-grade concurrent processing
-            for i in range(self.max_browser_contexts):
+            for i in range(self.settings.MAX_BROWSER_CONTEXTS):
                 context = await self.browser.new_context(
                     user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 viewport={"width": 1920, "height": 1080},
@@ -107,7 +119,7 @@ class MediaMarktScraper:
                 )
                 
                 # Create pages for this context
-                pages_per_context = self.max_concurrent_pages // self.max_browser_contexts
+                pages_per_context = self.settings.MAX_CONCURRENT_PAGES // self.settings.MAX_BROWSER_CONTEXTS
                 context_pages = []
                 for j in range(pages_per_context):
                     page = await context.new_page()
@@ -505,6 +517,46 @@ class MediaMarktScraper:
             if not title or len(title) < 5:
                 return None
             
+            # 🔥 CRITICAL FIX: Extract product URL
+            product_url = None
+            url_selectors = [
+                "a[href*='/products/']", 
+                "a[href*='/product/']",
+                "span.snize-title a",
+                ".product-title a",
+                ".title a",
+                "h3 a",
+                "h4 a", 
+                "h2 a",
+                "a"  # Fallback to any link within the product element
+            ]
+            
+            for selector in url_selectors:
+                url_elem = element.select_one(selector)
+                if url_elem:
+                    href = url_elem.get('href', '')
+                    if href:
+                        # Make URL absolute if it's relative
+                        if href.startswith('/'):
+                            product_url = urljoin(self.base_url, href)
+                        elif href.startswith('http'):
+                            product_url = href
+                        else:
+                            product_url = urljoin(page_url, href)
+                        
+                        # Validate URL contains product identifier
+                        if any(identifier in product_url.lower() for identifier in ['/product', '/products', '/p/', '/dp/']):
+                            break
+                        elif 'mediamarkt' in product_url.lower():
+                            break  # Accept any MediaMarkt URL as fallback
+            
+            # If no valid URL found, construct a fallback URL
+            if not product_url:
+                # Create a search-based fallback URL
+                search_title = title.replace(' ', '+').replace('&', '').replace(',', '')[:50]
+                product_url = f"{self.base_url}/search?q={search_title}"
+                logger.debug("Using fallback URL for product", title=title[:30], url=product_url)
+
             # Business-grade price extraction
             current_price = None
             price_selectors = ["span.snize-price", ".price", ".current-price", "[class*='price']"]
@@ -628,6 +680,7 @@ class MediaMarktScraper:
                 "brand": brand,
                 "category": category,
                 "availability": availability,
+                "url": product_url,  # 🔥 CRITICAL FIX: Include URL in return
                 "scraped_at": datetime.utcnow(),
                 "source": "mediamarkt",
                 "has_discount": has_discount,
@@ -637,6 +690,7 @@ class MediaMarktScraper:
                     "has_ean": bool(ean),
                     "has_brand": bool(brand),
                     "has_discount": has_discount,
+                    "has_url": bool(product_url),
                     "price_range": "high" if current_price >= 100 else "medium" if current_price >= 50 else "low"
                 }
             }
@@ -696,7 +750,7 @@ async def scrape_mediamarkt_products_business_grade(max_pages: int = 50, max_pro
     Returns:
         List of business-grade scraped products
     """
-    async with MediaMarktScraper(max_concurrent_pages=3, max_browser_contexts=2) as scraper:
+    async with MediaMarktScraper() as scraper:
         return await scraper.scrape_business_grade(max_pages=max_pages, max_products=max_products)
 
 # Enhanced legacy function

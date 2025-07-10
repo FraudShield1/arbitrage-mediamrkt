@@ -13,9 +13,12 @@ import redis.asyncio as redis
 import time
 from urllib.parse import urlparse
 
-from .settings import settings
+from .settings import get_settings
 
 logger = structlog.get_logger(__name__)
+
+# Get settings
+settings = get_settings()
 
 # Determine database type from URL
 def get_database_type() -> str:

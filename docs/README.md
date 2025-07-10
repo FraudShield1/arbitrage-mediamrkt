@@ -92,10 +92,14 @@ Automated arbitrage detection by scraping MediaMarkt.pt products and cross-refer
 ## Documentation
 
 - **[Setup Guide](setup-guide.md)**: Environment configuration and installation
+- **[Monitoring Guide](monitoring-guide.md)**: Comprehensive system monitoring and analytics
 - **[Troubleshooting](troubleshooting.md)**: Common issues and solutions
 - **[Testing Documentation](testing.md)**: Test suite and validation procedures
 - **[Technology Choices](technology-choices.md)**: Architecture decisions and rationale
 - **[Webhook Setup](webhook-setup.md)**: Telegram bot webhook configuration and usage
+- **[Security Guide](security.md)**: Security best practices and guidelines
+- **[Deployment Guide](deployment-guide.md)**: Detailed deployment instructions
+- **[CHANGELOG](CHANGELOG.md)**: Version history and updates
 
 ---
 
