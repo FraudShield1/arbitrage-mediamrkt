@@ -151,7 +151,11 @@ class MediaMarktScraper:
             
         except Exception as e:
             logger.error("Failed to start browser", error=str(e))
-            raise
+            logger.warning("Falling back to HTTP-only mode (limited functionality)")
+            # Don't raise the exception, just log it and continue with HTTP-only mode
+            self.browser = None
+            self.contexts = []
+            self.pages = []
     
     async def close_browser(self):
         """Close browser and cleanup resources."""
@@ -733,14 +737,82 @@ class MediaMarktScraper:
         except:
             return None
 
+    async def scrape_products_http_only(self, max_pages: int = 3, max_products: int = 50) -> List[Dict[str, Any]]:
+        """
+        HTTP-only scraping method that doesn't require Playwright browsers.
+        This is a fallback when browser automation is not available.
+        """
+        logger.info("🔄 Starting HTTP-only scraping (fallback mode)")
+        
+        products = []
+        page = 1
+        
+        try:
+            while page <= max_pages and len(products) < max_products:
+                logger.info(f"📄 Scraping page {page} via HTTP")
+                
+                # Use aiohttp to fetch the page
+                url = f"{self.base_url}/search?q=&page={page}"
+                
+                async with self.session.get(url, headers=self.headers) as response:
+                    if response.status == 200:
+                        html_content = await response.text()
+                        
+                        # Parse with BeautifulSoup
+                        soup = BeautifulSoup(html_content, 'html.parser')
+                        
+                        # Find product elements (basic selectors)
+                        product_elements = soup.find_all(['div', 'article'], class_=lambda x: x and 'product' in x.lower() if x else False)
+                        
+                        if not product_elements:
+                            # Try alternative selectors
+                            product_elements = soup.find_all(['div', 'article'], attrs={'data-product': True})
+                        
+                        logger.info(f"📦 Found {len(product_elements)} product elements on page {page}")
+                        
+                        for element in product_elements:
+                            if len(products) >= max_products:
+                                break
+                                
+                            try:
+                                product_data = self.extract_product_data_business_grade(element, url)
+                                if product_data:
+                                    products.append(product_data)
+                            except Exception as e:
+                                logger.warning(f"Failed to extract product data: {e}")
+                                continue
+                        
+                        page += 1
+                        await asyncio.sleep(1)  # Rate limiting
+                    else:
+                        logger.error(f"HTTP request failed with status {response.status}")
+                        break
+                        
+        except Exception as e:
+            logger.error(f"HTTP-only scraping failed: {e}")
+        
+        logger.info(f"✅ HTTP-only scraping completed: {len(products)} products found")
+        return products
+
     # Legacy methods for backward compatibility
     async def scrape_all_products_fast(self, max_pages: int = 10, max_products: int = 100) -> List[Dict[str, Any]]:
         """Legacy method - redirects to business-grade scraper."""
         return await self.scrape_business_grade(max_pages, max_products)
     
     async def scrape_all_products(self, max_pages: int = 3, max_products: int = 20) -> List[Dict[str, Any]]:
-        """Legacy method - redirects to business-grade scraper."""
-        return await self.scrape_business_grade(max_pages, max_products)
+        """Scrape all products with fallback to HTTP-only mode."""
+        try:
+            # Try browser-based scraping first
+            if self.browser and self.pages:
+                logger.info("🔄 Using browser-based scraping")
+                return await self.scrape_business_grade(max_pages, max_products)
+            else:
+                logger.info("🔄 Browser not available, using HTTP-only fallback")
+                return await self.scrape_products_http_only(max_pages, max_products)
+        except Exception as e:
+            logger.error(f"Scraping failed: {e}")
+            logger.info("🔄 Falling back to HTTP-only mode")
+            return await self.scrape_products_http_only(max_pages, max_products)
 
 
 # Business-grade standalone function
