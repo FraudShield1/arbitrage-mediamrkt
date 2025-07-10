@@ -203,12 +203,10 @@ async def start_scraping(background_tasks: BackgroundTasks):
     """Manually start a single scraping session."""
     try:
         # Import scraper here to avoid circular imports
-        from src.services.scraper.mediamarkt_scraper import MediaMarktScraper
+        from src.services.scraper.mediamarkt_scraper import scrape_mediamarkt_products
         
-        scraper = MediaMarktScraper()
-        
-        # Add scraping task to background using the correct method
-        background_tasks.add_task(scraper.scrape_all_products)
+        # Use the standalone function instead of class instantiation
+        background_tasks.add_task(scrape_mediamarkt_products, 3, 20)
         
         scraper_state["is_running"] = True
         scraper_state["last_start"] = datetime.utcnow().isoformat()
@@ -373,14 +371,12 @@ def run_scheduled_scraping():
 async def execute_scraping_session(scraping_type: str):
     """Execute a scraping session."""
     try:
-        from src.services.scraper.mediamarkt_scraper import MediaMarktScraper
-        
-        scraper = MediaMarktScraper()
+        from src.services.scraper.mediamarkt_scraper import scrape_mediamarkt_products
         
         if scraping_type == "light":
-            products = await scraper.scrape_all_products(max_pages=3, max_products=50)
+            products = await scrape_mediamarkt_products(max_pages=3, max_products=50)
         else:  # deep
-            products = await scraper.scrape_all_products(max_pages=10, max_products=200)
+            products = await scrape_mediamarkt_products(max_pages=10, max_products=200)
         
         scraper_state["is_running"] = False
         scraper_state["total_sessions"] += 1
