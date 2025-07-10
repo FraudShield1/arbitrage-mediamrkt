@@ -26,6 +26,111 @@ logger = logging.getLogger(__name__)
 _mongodb_loader_instance = None
 _mongodb_loader_lock = threading.Lock()
 
+@st.cache_data(ttl=300)
+def _cached_system_stats(mongodb_uri: str, database_name: str) -> Optional[Dict[str, Any]]:
+    """Cached system statistics calculation."""
+    try:
+        client = MongoClient(
+            mongodb_uri,
+            tls=True,
+            tlsAllowInvalidCertificates=True,
+            tlsAllowInvalidHostnames=True,
+            retryWrites=True,
+            w='majority',
+            maxPoolSize=5,
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=10000,
+            socketTimeoutMS=10000
+        )
+        db = client[database_name]
+        
+        now = datetime.utcnow()
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        yesterday = today - timedelta(days=1)
+        
+        # Products statistics
+        products_collection = db.products
+        total_products = products_collection.count_documents({})
+        
+        products_today = products_collection.count_documents({
+            "scraped_at": {"$gte": today}
+        })
+        
+        products_yesterday = products_collection.count_documents({
+            "scraped_at": {"$gte": yesterday, "$lt": today}
+        })
+        
+        in_stock_products = products_collection.count_documents({
+            "availability": {"$regex": "available|in stock", "$options": "i"}
+        })
+        
+        # Alert statistics  
+        alerts_collection = db.price_alerts
+        total_alerts = alerts_collection.count_documents({})
+        
+        active_alerts = alerts_collection.count_documents({
+            "status": "active"
+        })
+        
+        alerts_today = alerts_collection.count_documents({
+            "created_at": {"$gte": today}
+        })
+        
+        # Critical alerts count
+        critical_alerts = alerts_collection.count_documents({
+            "status": "active",
+            "severity": "critical"
+        })
+        
+        # Calculate growth rates
+        products_growth = ((products_today - products_yesterday) / products_yesterday * 100) if products_yesterday > 0 else 0.0
+        stock_rate = (in_stock_products / total_products * 100) if total_products > 0 else 0.0
+        
+        # Profit metrics from alerts
+        profit_pipeline = [
+            {"$match": {"status": "active"}},
+            {"$group": {
+                "_id": None,
+                "total_potential": {"$sum": "$profit_amount"},
+                "avg_profit": {"$avg": "$profit_amount"},
+                "max_profit": {"$max": "$profit_amount"},
+                "avg_discount": {"$avg": "$profit_margin"},
+                "count": {"$sum": 1}
+            }}
+        ]
+        
+        profit_result = list(alerts_collection.aggregate(profit_pipeline))
+        profit_data = profit_result[0] if profit_result else {}
+        
+        # Safely extract profit data with null checks
+        total_potential = profit_data.get("total_potential") or 0
+        avg_profit = profit_data.get("avg_profit") or 0
+        max_profit = profit_data.get("max_profit") or 0
+        avg_discount = profit_data.get("avg_discount") or 0
+        count = profit_data.get("count") or 0
+        
+        client.close()
+        
+        return {
+            "total_products": total_products,
+            "products_today": products_today,
+            "products_growth": products_growth,
+            "in_stock_rate": stock_rate,
+            "total_alerts": total_alerts,
+            "active_alerts": active_alerts,
+            "alerts_today": alerts_today,
+            "critical_alerts": critical_alerts,
+            "total_potential_profit": total_potential,
+            "average_profit": avg_profit,
+            "max_profit": max_profit,
+            "average_discount": avg_discount,
+            "success_rate": (active_alerts / total_alerts * 100) if total_alerts > 0 else 0.0,
+            "last_updated": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get system stats: {e}")
+        return None
 
 def get_mongodb_loader():
     """Get the singleton MongoDB loader instance."""
@@ -43,7 +148,6 @@ def get_mongodb_loader():
         logger.debug("♻️ Reusing cached MongoDB loader instance")
     
     return _mongodb_loader_instance
-
 
 class MongoDBDataLoader:
     """Direct MongoDB data loader for dashboard with singleton pattern."""
@@ -83,16 +187,16 @@ class MongoDBDataLoader:
         """Connect to MongoDB with proper SSL configuration."""
         try:
             # Get MongoDB URI from environment - try multiple variable names
-            mongodb_uri = os.getenv('MONGODB_URL') or os.getenv('MONGODB_URI') or os.getenv('DATABASE_URL', 'mongodb://localhost:27017')
-            database_name = os.getenv('MONGODB_DATABASE', 'arbitrage_tool')
+            self.mongodb_uri = os.getenv('MONGODB_URL') or os.getenv('MONGODB_URI') or os.getenv('DATABASE_URL', 'mongodb://localhost:27017')
+            self.database_name = os.getenv('MONGODB_DATABASE', 'arbitrage_tool')
             
-            logger.info(f"🔗 Establishing MongoDB connection to: {database_name}")
+            logger.info(f"🔗 Establishing MongoDB connection to: {self.database_name}")
             
             # Create synchronous client with SSL configuration for Atlas
-            if 'mongodb+srv://' in mongodb_uri or 'mongodb.net' in mongodb_uri:
+            if 'mongodb+srv://' in self.mongodb_uri or 'mongodb.net' in self.mongodb_uri:
                 # MongoDB Atlas connection
                 self.client = MongoClient(
-                    mongodb_uri,
+                    self.mongodb_uri,
                     tls=True,
                     tlsAllowInvalidCertificates=True,
                     tlsAllowInvalidHostnames=True,
@@ -105,13 +209,13 @@ class MongoDBDataLoader:
                 )
             else:
                 # Local MongoDB connection
-                self.client = MongoClient(mongodb_uri, maxPoolSize=5)
+                self.client = MongoClient(self.mongodb_uri, maxPoolSize=5)
             
-            self.db = self.client[database_name]
+            self.db = self.client[self.database_name]
             
             # Test connection
             self.db.command("ping")
-            logger.info(f"✅ MongoDB connection established successfully to {database_name}")
+            logger.info(f"✅ MongoDB connection established successfully to {self.database_name}")
             
         except Exception as e:
             logger.error(f"❌ Failed to connect to MongoDB: {e}")
@@ -122,7 +226,7 @@ class MongoDBDataLoader:
     
     def get_system_stats(self) -> Optional[Dict[str, Any]]:
         """Get system statistics from MongoDB."""
-        return self._get_system_stats_cached()
+        return _cached_system_stats(self.mongodb_uri, self.database_name)
     
     def _get_system_stats_cached(self) -> Optional[Dict[str, Any]]:
         """Cached implementation of get_system_stats."""
