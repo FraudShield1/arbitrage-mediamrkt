@@ -20,8 +20,15 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 import logging
 
-# Import page modules
-from src.dashboard.pages import overview, products, alerts, analytics, sources, settings, monitoring
+# Import page modules directly
+from src.dashboard.pages.overview import render_page as render_overview
+from src.dashboard.pages.products import render_page as render_products
+from src.dashboard.pages.alerts import render_page as render_alerts
+from src.dashboard.pages.analytics import render_page as render_analytics
+from src.dashboard.pages.sources import render_page as render_sources
+from src.dashboard.pages.settings import render_page as render_settings
+from src.dashboard.pages.monitoring import render_page as render_monitoring
+
 from src.dashboard.components.navigation import NavigationManager
 from src.dashboard.utils.mongodb_loader import get_mongodb_loader
 from src.dashboard.utils.styling import apply_custom_styling, load_theme_config
@@ -56,43 +63,43 @@ class ArbitrageDashboard:
         self.pages = {
             "overview": {
                 "title": "🏠 Overview",
-                "module": overview,
+                "render": render_overview,
                 "description": "Main dashboard with KPIs and activity feed",
                 "order": 1
             },
             "products": {
                 "title": "📦 Products",
-                "module": products,
+                "render": render_products,
                 "description": "Browse and search product catalog",
                 "order": 2
             },
             "alerts": {
                 "title": "🚨 Alerts",
-                "module": alerts,
+                "render": render_alerts,
                 "description": "Manage arbitrage opportunities",
                 "order": 3
             },
             "analytics": {
                 "title": "📈 Analytics",
-                "module": analytics,
+                "render": render_analytics,
                 "description": "Business intelligence and insights",
                 "order": 4
             },
             "sources": {
                 "title": "🏪 Sources",
-                "module": sources,
+                "render": render_sources,
                 "description": "Manage ecommerce sources",
                 "order": 5
             },
             "settings": {
                 "title": "⚙️ Settings",
-                "module": settings,
+                "render": render_settings,
                 "description": "System configuration",
                 "order": 6
             },
             "monitoring": {
                 "title": "🔧 Monitoring",
-                "module": monitoring,
+                "render": render_monitoring,
                 "description": "System health and performance",
                 "order": 7
             }
@@ -265,8 +272,8 @@ class ArbitrageDashboard:
         
         try:
             # Load and render the page module
-            page_module = page_config['module']
-            page_module.render(self.data_loader)
+            page_module = page_config['render']
+            page_module(self.data_loader)
             
         except Exception as e:
             logger.error(f"Error rendering page {current_page}: {e}")

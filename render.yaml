@@ -1,9 +1,12 @@
 services:
+  # FastAPI Backend Service
   - type: web
     name: arbitrage-mediamrkt-api
     env: python
+    region: frankfurt  # EU region for better latency with EU marketplaces
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn src.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.0
@@ -16,4 +19,21 @@ services:
       - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
       - key: REDIS_URL
-        sync: false 
+        sync: false
+    autoDeploy: true
+    
+  # Streamlit Dashboard Service
+  - type: web
+    name: arbitrage-mediamrkt-dashboard
+    env: python
+    region: frankfurt
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run src/dashboard/main.py --server.port $PORT --server.address 0.0.0.0
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0
+      - key: MONGODB_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+    autoDeploy: true 
