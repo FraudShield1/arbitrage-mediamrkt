@@ -233,6 +233,32 @@ async def start_scraping(background_tasks: BackgroundTasks):
         logger.error(f"Failed to start scraping: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to start scraping: {str(e)}")
 
+# Manual trigger for immediate scraping (for testing)
+@app.post("/api/v1/scraper/trigger-now")
+async def trigger_immediate_scraping():
+    """Trigger immediate scraping session for testing."""
+    try:
+        logger.info("🎯 Manual trigger: Starting immediate scraping session")
+        
+        # Execute scraping session immediately
+        products_found = await execute_scraping_session("light")
+        
+        return {
+            "status": "completed",
+            "message": f"Immediate scraping completed with {products_found} products",
+            "products_found": products_found,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Failed to trigger immediate scraping: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to trigger scraping: {str(e)}")
+
+# GET version for browser testing
+@app.get("/api/v1/scraper/trigger-now")
+async def trigger_immediate_scraping_get():
+    """Trigger immediate scraping session (GET version for browser testing)."""
+    return await trigger_immediate_scraping()
+
 # Test scraper endpoint
 @app.get("/api/v1/scraper/test")
 async def test_scraper():
@@ -348,7 +374,7 @@ def run_scheduled_scraping():
     """Run scheduled scraping in background thread."""
     global scraper_state
     
-    logger.info("Starting scheduled scraping thread")
+    logger.info("🚀 Starting scheduled scraping thread")
     
     while not stop_scheduler.is_set():
         try:
@@ -356,63 +382,114 @@ def run_scheduled_scraping():
             minute = current_time.minute
             hour = current_time.hour
             
+            logger.info(f"⏰ Scheduled scraping check - Time: {current_time.strftime('%H:%M')}, Minute: {minute}, Hour: {hour}")
+            
             # Light scraping every 15 minutes
             if minute % 15 == 0:
-                logger.info("Starting scheduled light scraping")
-                asyncio.run(execute_scraping_session("light"))
+                logger.info("🔄 Starting scheduled light scraping")
+                try:
+                    # Create new event loop for this thread
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(execute_scraping_session("light"))
+                    loop.close()
+                except Exception as e:
+                    logger.error(f"❌ Error in light scraping: {e}")
             
             # Deep scraping every 3 hours
             if hour % 3 == 0 and minute == 0:
-                logger.info("Starting scheduled deep scraping")
-                asyncio.run(execute_scraping_session("deep"))
+                logger.info("🔥 Starting scheduled deep scraping")
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(execute_scraping_session("deep"))
+                    loop.close()
+                except Exception as e:
+                    logger.error(f"❌ Error in deep scraping: {e}")
             
             # Analysis every hour
             if minute == 0:
-                logger.info("Starting scheduled analysis")
-                asyncio.run(execute_analysis_session())
+                logger.info("📊 Starting scheduled analysis")
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(execute_analysis_session())
+                    loop.close()
+                except Exception as e:
+                    logger.error(f"❌ Error in analysis: {e}")
             
             # Sleep for 1 minute before next check
             time.sleep(60)
             
         except Exception as e:
-            logger.error(f"Error in scheduled scraping: {e}")
+            logger.error(f"❌ Error in scheduled scraping loop: {e}")
             time.sleep(60)  # Wait before retrying
     
-    logger.info("Scheduled scraping thread stopped")
+    logger.info("🛑 Scheduled scraping thread stopped")
 
 async def execute_scraping_session(scraping_type: str):
     """Execute a scraping session."""
     try:
+        logger.info(f"🎯 Starting {scraping_type} scraping session")
+        
         from src.services.scraper.mediamarkt_scraper import scrape_mediamarkt_products
         
+        scraper_state["is_running"] = True
+        scraper_state["current_session"] = {
+            "type": scraping_type,
+            "started_at": datetime.utcnow().isoformat()
+        }
+        
         if scraping_type == "light":
+            logger.info("📦 Light scraping: 3 pages, 50 products max")
             products = await scrape_mediamarkt_products(max_pages=3, max_products=50)
         else:  # deep
+            logger.info("📦 Deep scraping: 10 pages, 200 products max")
             products = await scrape_mediamarkt_products(max_pages=10, max_products=200)
         
         scraper_state["is_running"] = False
         scraper_state["total_sessions"] += 1
+        scraper_state["current_session"] = None
         
-        logger.info(f"Scheduled {scraping_type} scraping completed", 
-                   products_found=len(products))
+        logger.info(f"✅ {scraping_type.capitalize()} scraping completed", 
+                   products_found=len(products),
+                   session_type=scraping_type)
+        
+        return len(products)
         
     except Exception as e:
-        logger.error(f"Error in scheduled scraping session: {e}")
+        logger.error(f"❌ Error in {scraping_type} scraping session: {e}")
         scraper_state["is_running"] = False
+        scraper_state["current_session"] = None
+        return 0
 
 async def execute_analysis_session():
     """Execute analysis session."""
     try:
-        # Import analysis functions here
-        logger.info("Starting scheduled analysis session")
+        logger.info("📊 Starting scheduled analysis session")
         
-        # Add your analysis logic here
-        # Example: analyze_arbitrage_opportunities()
+        # Get current product count
+        from src.config.database import get_database_session
+        db = get_database_session()
+        total_products = await db.products.count_documents({})
         
-        logger.info("Scheduled analysis completed")
+        # Get recent products (last 24 hours)
+        yesterday = datetime.utcnow() - timedelta(days=1)
+        recent_products = await db.products.count_documents({
+            "scraped_at": {"$gte": yesterday}
+        })
+        
+        logger.info("📈 Analysis completed",
+                   total_products=total_products,
+                   recent_products_24h=recent_products)
+        
+        # Update scraper state with analysis results
+        scraper_state["last_analysis"] = datetime.utcnow().isoformat()
+        scraper_state["total_products"] = total_products
+        scraper_state["recent_products_24h"] = recent_products
         
     except Exception as e:
-        logger.error(f"Error in scheduled analysis: {e}")
+        logger.error(f"❌ Error in analysis session: {e}")
 
 if __name__ == "__main__":
     import uvicorn
