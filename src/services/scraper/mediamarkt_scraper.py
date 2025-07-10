@@ -30,16 +30,27 @@ class MediaMarktScraper:
     def __init__(self):
         """Initialize the scraper with enhanced configuration."""
         self.settings = get_settings()
+        import ssl
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
         self.session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=self.settings.SCRAPING_TIMEOUT),
-            connector=aiohttp.TCPConnector(limit=self.settings.SCRAPING_CONCURRENT_LIMIT)
+            connector=aiohttp.TCPConnector(limit=self.settings.SCRAPING_CONCURRENT_LIMIT, ssl=ssl_context)
         )
         
         # Initialize browser-related attributes
         self.browser = None
         self.contexts = []
         self.pages = []
-        self.performance_metrics = {}
+        self.performance_metrics = {
+            "start_time": None,
+            "pages_processed": 0,
+            "products_found": 0,
+            "duplicates_filtered": 0,
+            "errors": 0
+        }
+        self.seen_products = set()  # Add missing seen_products set
         
         # Base URLs for different MediaMarkt domains
         self.base_urls = {
@@ -47,6 +58,10 @@ class MediaMarktScraper:
             'es': 'https://mediamarkt.es', 
             'de': 'https://mediamarkt.de'
         }
+        
+        # Set default base URL
+        self.base_url = self.base_urls['pt']
+        self.search_url = f"{self.base_url}/search?q="
         
         # Enhanced headers for better stealth
         self.headers = {
@@ -97,7 +112,6 @@ class MediaMarktScraper:
                     "--disable-renderer-backgrounding",
                     "--disable-extensions",
                     "--disable-plugins",
-                    "--disable-images",  # Disable image loading for speed
                     "--disable-javascript-harmony-shipping",
                     "--disable-background-networking",
                     "--disable-default-apps",
@@ -442,23 +456,43 @@ class MediaMarktScraper:
         Business-grade single page scraping with enhanced error handling.
         """
         try:
-            # Navigate with business-grade timeouts
-            await page.goto(url, wait_until="networkidle", timeout=30000)
+            # Navigate with business-grade timeouts and better JavaScript handling
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
             
-            # Business-grade product detection
-            try:
-                await page.wait_for_selector("li.snize-product", timeout=15000)
-            except:
-                # Try alternative selectors with business fallbacks
-                alternative_selectors = [".product-item", ".product", "[data-product]"]
-                for selector in alternative_selectors:
-                    try:
-                        await page.wait_for_selector(selector, timeout=5000)
-                        break
-                    except:
-                        continue
+            # Wait for JavaScript to load content
+            await asyncio.sleep(3)  # Give JavaScript time to render
             
-            # Get content efficiently
+            # Business-grade product detection with multiple strategies
+            product_selectors = [
+                "li.snize-product",
+                ".product-item", 
+                ".product", 
+                "[data-product]",
+                "[class*='product']",
+                "article[data-product]",
+                "div[data-product]"
+            ]
+            
+            products_found = False
+            for selector in product_selectors:
+                try:
+                    # Wait for selector with shorter timeout
+                    await page.wait_for_selector(selector, timeout=5000)
+                    products_found = True
+                    logger.info(f"Found products using selector: {selector}")
+                    break
+                except:
+                    continue
+            
+            if not products_found:
+                # Try to wait for any content to load
+                try:
+                    await page.wait_for_selector("body", timeout=10000)
+                    await asyncio.sleep(2)  # Additional wait for dynamic content
+                except:
+                    pass
+            
+            # Get content efficiently with JavaScript evaluation
             content = await page.evaluate("() => document.body.innerHTML")
             soup = BeautifulSoup(content, 'html.parser')
             
@@ -466,17 +500,36 @@ class MediaMarktScraper:
             product_elements = soup.select("li.snize-product")
             if not product_elements:
                 fallback_selectors = [
-                    ".product-item", ".product", "[data-product]", "[class*='product']"
+                    ".product-item", ".product", "[data-product]", "[class*='product']",
+                    "article[data-product]", "div[data-product]"
                 ]
                 for selector in fallback_selectors:
                     product_elements = soup.select(selector)
                     if product_elements:
                         logger.info("Using business fallback selector", 
                                    selector=selector, page=page_num)
-                    break
+                        break
+            
+            if not product_elements:
+                # Try to find any product-like elements
+                all_elements = soup.find_all(['div', 'li', 'article'])
+                product_elements = []
+                for elem in all_elements:
+                    # Look for elements that might contain product data
+                    if (elem.get('class') and any('product' in str(c).lower() for c in elem.get('class', [])) or
+                        elem.get('data-product') or
+                        elem.find('a') or
+                        elem.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])):
+                        product_elements.append(elem)
+                
+                if product_elements:
+                    logger.info("Found potential product elements using generic search", 
+                               count=len(product_elements), page=page_num)
             
             if not product_elements:
                 logger.warning("No products found on business page", page=page_num, url=url)
+                # Log page content for debugging
+                logger.debug(f"Page content preview: {content[:500]}...")
                 return []
             
             # Business-grade parallel extraction with increased workers
@@ -758,15 +811,18 @@ class MediaMarktScraper:
                     if response.status == 200:
                         html_content = await response.text()
                         
+                        # Print first 500 characters for debugging
+                        logger.info(f"HTML preview (first 500 chars): {html_content[:500]}")
+                        
                         # Parse with BeautifulSoup
                         soup = BeautifulSoup(html_content, 'html.parser')
                         
-                        # Find product elements (basic selectors)
-                        product_elements = soup.find_all(['div', 'article'], class_=lambda x: x and 'product' in x.lower() if x else False)
+                        # Main selector: any element with class containing 'product'
+                        product_elements = soup.select("[class*='product']")
                         
+                        # Fallbacks if nothing found
                         if not product_elements:
-                            # Try alternative selectors
-                            product_elements = soup.find_all(['div', 'article'], attrs={'data-product': True})
+                            product_elements = soup.select("div[data-product], article[data-product]")
                         
                         logger.info(f"📦 Found {len(product_elements)} product elements on page {page}")
                         
