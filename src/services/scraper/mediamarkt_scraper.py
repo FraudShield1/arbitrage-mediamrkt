@@ -35,6 +35,12 @@ class MediaMarktScraper:
             connector=aiohttp.TCPConnector(limit=self.settings.SCRAPING_CONCURRENT_LIMIT)
         )
         
+        # Initialize browser-related attributes
+        self.browser = None
+        self.contexts = []
+        self.pages = []
+        self.performance_metrics = {}
+        
         # Base URLs for different MediaMarkt domains
         self.base_urls = {
             'pt': 'https://mediamarkt.pt',
@@ -556,7 +562,7 @@ class MediaMarktScraper:
                 search_title = title.replace(' ', '+').replace('&', '').replace(',', '')[:50]
                 product_url = f"{self.base_url}/search?q={search_title}"
                 logger.debug("Using fallback URL for product", title=title[:30], url=product_url)
-
+            
             # Business-grade price extraction
             current_price = None
             price_selectors = ["span.snize-price", ".price", ".current-price", "[class*='price']"]
