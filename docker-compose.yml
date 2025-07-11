@@ -1,505 +1,64 @@
 version: '3.8'
 
 services:
-  # PostgreSQL Database with enhanced configuration
-  postgres:
-    image: postgres:15-alpine
-    container_name: arbitrage_postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-arbitrage}
-      POSTGRES_USER: ${POSTGRES_USER:-arbitrage_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-arbitrage_password}
-      POSTGRES_HOST_AUTH_METHOD: trust
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-      - ./config/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+  api:
+    build: .
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    command: postgres -c config_file=/etc/postgresql/postgresql.conf
+      - "8000:8000"
+    environment:
+      - MONGODB_URL=${MONGODB_URL}
+      - REDIS_URL=${REDIS_URL}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - KEEPA_API_KEY=${KEEPA_API_KEY}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-arbitrage_user} -d ${POSTGRES_DB:-arbitrage}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - arbitrage_network
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    depends_on:
+      - redis
 
-  # Redis Cache and Message Broker with enhanced configuration
+  worker:
+    build: .
+    command: celery -A src.tasks worker -B -l INFO
+    environment:
+      - MONGODB_URL=${MONGODB_URL}
+      - REDIS_URL=${REDIS_URL}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - KEEPA_API_KEY=${KEEPA_API_KEY}
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - api
+
+  dashboard:
+    build: .
+    command: streamlit run src/dashboard/main.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"
+    environment:
+      - MONGODB_URL=${MONGODB_URL}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    depends_on:
+      - api
+
   redis:
     image: redis:7-alpine
-    container_name: arbitrage_redis
-    restart: unless-stopped
-    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru --save 60 1000
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
-      - ./config/redis.conf:/usr/local/etc/redis/redis.conf:ro
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - arbitrage_network
-
-  # Nginx Load Balancer
-  nginx:
-    image: nginx:alpine
-    container_name: arbitrage_nginx
     restart: unless-stopped
-    ports:
-      - "${NGINX_HTTP_PORT:-80}:80"
-      - "${NGINX_HTTPS_PORT:-443}:443"
-    volumes:
-      - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./config/ssl:/etc/nginx/ssl:ro
-      - ./logs/nginx:/var/log/nginx
-    depends_on:
-      - api-1
-      - api-2
-      - dashboard
-    networks:
-      - arbitrage_network
-
-  # FastAPI Application - Instance 1
-  api-1:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: arbitrage_api_1
-    restart: unless-stopped
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-arbitrage_user}:${POSTGRES_PASSWORD:-arbitrage_password}@postgres:5432/${POSTGRES_DB:-arbitrage}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
-      - API_HOST=0.0.0.0
-      - API_PORT=8000
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - ENVIRONMENT=${ENVIRONMENT:-production}
-      - INSTANCE_ID=api-1
-    volumes:
-      - ./logs:/app/logs
-      - ./data:/app/data
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: '1.0'
-        reservations:
-          memory: 1G
-          cpus: '0.5'
-    networks:
-      - arbitrage_network
-
-  # FastAPI Application - Instance 2
-  api-2:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: arbitrage_api_2
-    restart: unless-stopped
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-arbitrage_user}:${POSTGRES_PASSWORD:-arbitrage_password}@postgres:5432/${POSTGRES_DB:-arbitrage}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
-      - API_HOST=0.0.0.0
-      - API_PORT=8000
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - ENVIRONMENT=${ENVIRONMENT:-production}
-      - INSTANCE_ID=api-2
-    volumes:
-      - ./logs:/app/logs
-      - ./data:/app/data
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: '1.0'
-        reservations:
-          memory: 1G
-          cpus: '0.5'
-    networks:
-      - arbitrage_network
-
-  # Celery Worker - Scraping Queue
-  celery-worker-scraping:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: arbitrage_celery_scraping
-    restart: unless-stopped
-    command: celery -A src.config.celery worker --loglevel=info --concurrency=6 --queues=scraping,urgent --hostname=scraping@%h
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-arbitrage_user}:${POSTGRES_PASSWORD:-arbitrage_password}@postgres:5432/${POSTGRES_DB:-arbitrage}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - ENVIRONMENT=${ENVIRONMENT:-production}
-      - WORKER_TYPE=scraping
-    volumes:
-      - ./logs:/app/logs
-      - ./data:/app/data
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "celery", "-A", "src.config.celery", "inspect", "ping", "-d", "scraping@arbitrage_celery_scraping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    deploy:
-      resources:
-        limits:
-          memory: 3G
-          cpus: '2.0'
-        reservations:
-          memory: 1.5G
-          cpus: '1.0'
-    networks:
-      - arbitrage_network
-
-  # Celery Worker - Matching Queue
-  celery-worker-matching:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: arbitrage_celery_matching
-    restart: unless-stopped
-    command: celery -A src.config.celery worker --loglevel=info --concurrency=4 --queues=matching,priority --hostname=matching@%h
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-arbitrage_user}:${POSTGRES_PASSWORD:-arbitrage_password}@postgres:5432/${POSTGRES_DB:-arbitrage}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - ENVIRONMENT=${ENVIRONMENT:-production}
-      - WORKER_TYPE=matching
-    volumes:
-      - ./logs:/app/logs
-      - ./data:/app/data
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "celery", "-A", "src.config.celery", "inspect", "ping", "-d", "matching@arbitrage_celery_matching"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: '1.5'
-        reservations:
-          memory: 1G
-          cpus: '0.75'
-    networks:
-      - arbitrage_network
-
-  # Celery Worker - Analysis Queue
-  celery-worker-analysis:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: arbitrage_celery_analysis
-    restart: unless-stopped
-    command: celery -A src.config.celery worker --loglevel=info --concurrency=4 --queues=analysis,priority --hostname=analysis@%h
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-arbitrage_user}:${POSTGRES_PASSWORD:-arbitrage_password}@postgres:5432/${POSTGRES_DB:-arbitrage}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - ENVIRONMENT=${ENVIRONMENT:-production}
-      - WORKER_TYPE=analysis
-    volumes:
-      - ./logs:/app/logs
-      - ./data:/app/data
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "celery", "-A", "src.config.celery", "inspect", "ping", "-d", "analysis@arbitrage_celery_analysis"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: '1.5'
-        reservations:
-          memory: 1G
-          cpus: '0.75'
-    networks:
-      - arbitrage_network
-
-  # Celery Worker - Notifications Queue
-  celery-worker-notifications:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: arbitrage_celery_notifications
-    restart: unless-stopped
-    command: celery -A src.config.celery worker --loglevel=info --concurrency=8 --queues=notifications,urgent --hostname=notifications@%h
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-arbitrage_user}:${POSTGRES_PASSWORD:-arbitrage_password}@postgres:5432/${POSTGRES_DB:-arbitrage}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - ENVIRONMENT=${ENVIRONMENT:-production}
-      - WORKER_TYPE=notifications
-    volumes:
-      - ./logs:/app/logs
-      - ./data:/app/data
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "celery", "-A", "src.config.celery", "inspect", "ping", "-d", "notifications@arbitrage_celery_notifications"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-          cpus: '1.0'
-        reservations:
-          memory: 512M
-          cpus: '0.5'
-    networks:
-      - arbitrage_network
-
-  # Celery Worker - General Purpose
-  celery-worker-general:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: arbitrage_celery_general
-    restart: unless-stopped
-    command: celery -A src.config.celery worker --loglevel=info --concurrency=4 --queues=default,maintenance --hostname=general@%h
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-arbitrage_user}:${POSTGRES_PASSWORD:-arbitrage_password}@postgres:5432/${POSTGRES_DB:-arbitrage}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - ENVIRONMENT=${ENVIRONMENT:-production}
-      - WORKER_TYPE=general
-    volumes:
-      - ./logs:/app/logs
-      - ./data:/app/data
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "celery", "-A", "src.config.celery", "inspect", "ping", "-d", "general@arbitrage_celery_general"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    deploy:
-      resources:
-        limits:
-          memory: 1.5G
-          cpus: '1.0'
-        reservations:
-          memory: 768M
-          cpus: '0.5'
-    networks:
-      - arbitrage_network
-
-  # Celery Beat Scheduler
-  celery-beat:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: arbitrage_celery_beat
-    restart: unless-stopped
-    command: celery -A src.config.celery beat --loglevel=info --scheduler celery.beat:PersistentScheduler
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-arbitrage_user}:${POSTGRES_PASSWORD:-arbitrage_password}@postgres:5432/${POSTGRES_DB:-arbitrage}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - ENVIRONMENT=${ENVIRONMENT:-production}
-    volumes:
-      - ./logs:/app/logs
-      - ./data:/app/data
-      - celery_beat_data:/app/celerybeat-schedule
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: '0.5'
-        reservations:
-          memory: 256M
-          cpus: '0.25'
-    networks:
-      - arbitrage_network
-
-  # Streamlit Dashboard
-  dashboard:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: arbitrage_dashboard
-    restart: unless-stopped
-    command: streamlit run src/dashboard/main.py --server.port=8501 --server.address=0.0.0.0 --server.maxUploadSize=50
-    environment:
-      - API_BASE_URL=http://nginx/api
-      - STREAMLIT_SERVER_PORT=8501
-      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
-      - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
-    depends_on:
-      - nginx
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/healthz"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-          cpus: '0.5'
-        reservations:
-          memory: 512M
-          cpus: '0.25'
-    networks:
-      - arbitrage_network
-
-  # Flower - Celery Monitoring
-  flower:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: arbitrage_flower
-    restart: unless-stopped
-    command: celery -A src.config.celery flower --port=5555 --broker=redis://redis:6379/1
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
-      - FLOWER_PORT=5555
-      - FLOWER_BASIC_AUTH=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-admin123}
-    depends_on:
-      redis:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-          cpus: '0.25'
-        reservations:
-          memory: 128M
-          cpus: '0.1'
-    networks:
-      - arbitrage_network
-
-  # Prometheus for Metrics Collection
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: arbitrage_prometheus
-    restart: unless-stopped
-    ports:
-      - "${PROMETHEUS_PORT:-9090}:9090"
-    volumes:
-      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--storage.tsdb.retention.time=15d'
-      - '--web.enable-lifecycle'
-    networks:
-      - arbitrage_network
-
-  # Grafana for Metrics Visualization
-  grafana:
-    image: grafana/grafana:latest
-    container_name: arbitrage_grafana
-    restart: unless-stopped
-    ports:
-      - "${GRAFANA_PORT:-3000}:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin123}
-      - GF_USERS_ALLOW_SIGN_UP=false
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./config/grafana:/etc/grafana/provisioning:ro
-    depends_on:
-      - prometheus
-    networks:
-      - arbitrage_network
 
 volumes:
-  postgres_data:
-    driver: local
-  redis_data:
-    driver: local
-  celery_beat_data:
-    driver: local
-  prometheus_data:
-    driver: local
-  grafana_data:
-    driver: local
-
-networks:
-  arbitrage_network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16 
+  redis_data: 

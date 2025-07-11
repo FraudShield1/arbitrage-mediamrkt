@@ -1,75 +1,62 @@
-# Use Python 3.11 slim image for better performance and smaller size
-FROM python:3.11-slim
-
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PYTHONIOENCODING=utf-8 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
-
-# Create app user for security
-RUN groupadd -g 1000 app && \
-    useradd -r -u 1000 -g app app
+FROM python:3.11-slim as builder
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    libc6-dev \
-    libpq-dev \
+    build-essential \
     curl \
-    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Playwright dependencies
+# Create and activate virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+FROM python:3.11-slim
+
+# Install system dependencies for Playwright
 RUN apt-get update && apt-get install -y \
     libnss3 \
     libnspr4 \
-    libdbus-1-3 \
     libatk1.0-0 \
     libatk-bridge2.0-0 \
+    libcups2 \
     libdrm2 \
+    libdbus-1-3 \
     libxkbcommon0 \
     libxcomposite1 \
     libxdamage1 \
+    libxfixes3 \
     libxrandr2 \
     libgbm1 \
-    libxss1 \
+    libpango-1.0-0 \
+    libcairo2 \
     libasound2 \
-    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Set work directory
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Set working directory
 WORKDIR /app
-
-# Copy requirements first for better Docker layer caching
-COPY requirements.txt requirements-dev.txt ./
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Install Playwright browsers
-RUN playwright install chromium
 
 # Copy application code
 COPY . .
 
-# Change ownership to app user
-RUN chown -R app:app /app
+# Install Playwright browser
+RUN playwright install chromium && \
+    playwright install-deps chromium
 
-# Switch to app user
-USER app
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV ENVIRONMENT=production
+ENV DEBUG=false
 
-# Create necessary directories
-RUN mkdir -p /app/logs /app/data
+# Create non-root user
+RUN useradd -m -u 1000 appuser
+USER appuser
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
-# Expose port
-EXPOSE 8000
-
-# Default command
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"] 
+# Command will be specified in docker-compose.yml 
