@@ -8,7 +8,41 @@
 4. Redis Cloud account (optional, can use local Redis)
 5. Telegram Bot token and chat ID
 
-## Step 1: Create Droplet
+## Step 1: SSH Key Setup
+
+1. Check for existing SSH keys:
+```bash
+ls -la ~/.ssh
+```
+
+2. If you don't have an SSH key (no files like id_rsa.pub or id_ed25519.pub), create one:
+```bash
+# Generate new SSH key (Ed25519 - recommended)
+ssh-keygen -t ed25519 -C "your_email@example.com"
+
+# Or RSA (legacy but widely supported)
+ssh-keygen -t rsa -b 4096 -C "your_email@example.com"
+```
+
+3. Add SSH key to DigitalOcean:
+   - Log into your DigitalOcean account
+   - Go to Settings > Security > SSH Keys
+   - Click "Add SSH Key"
+   - Copy your public key:
+     ```bash
+     # For Ed25519 key
+     cat ~/.ssh/id_ed25519.pub
+     # Or for RSA key
+     cat ~/.ssh/id_rsa.pub
+     ```
+   - Paste the key into DigitalOcean and give it a name
+
+4. Test your SSH key (after creating droplet):
+```bash
+ssh -T root@your_droplet_ip
+```
+
+## Step 2: Create Droplet
 
 1. Log in to your DigitalOcean account
 2. Click "Create" > "Droplets"
@@ -18,10 +52,10 @@
    - **CPU option**: Regular with SSD
    - **Size**: $24/mo (4GB/2CPUs) - Recommended for production
    - **Region**: Choose closest to target market (Frankfurt for EU)
-   - **Authentication**: SSH keys (recommended)
+   - **Authentication**: Select your SSH key (added in Step 1)
    - **Hostname**: arbitrage-mediamrkt
 
-## Step 2: Initial Server Setup
+## Step 3: Initial Server Setup
 
 1. SSH into your droplet:
 ```bash
@@ -44,7 +78,7 @@ systemctl enable docker
 apt install -y git curl
 ```
 
-## Step 3: Clone and Configure Repository
+## Step 4: Clone and Configure Repository
 
 1. Clone the repository:
 ```bash
@@ -71,7 +105,7 @@ TELEGRAM_CHAT_ID=your_chat_id
 KEEPA_API_KEY=your_keepa_api_key
 ```
 
-## Step 4: Deploy with Docker Compose
+## Step 5: Deploy with Docker Compose
 
 1. Build and start services:
 ```bash
@@ -90,7 +124,7 @@ docker-compose logs -f
 curl http://localhost:8000/health
 ```
 
-## Step 5: Setup Nginx Reverse Proxy (Optional)
+## Step 6: Setup Nginx Reverse Proxy (Optional)
 
 1. Install Nginx:
 ```bash
@@ -135,7 +169,7 @@ nginx -t
 systemctl restart nginx
 ```
 
-## Step 6: Setup SSL with Certbot (Optional)
+## Step 7: Setup SSL with Certbot (Optional)
 
 1. Install Certbot:
 ```bash
